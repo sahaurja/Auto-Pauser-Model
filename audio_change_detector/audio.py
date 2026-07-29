@@ -104,6 +104,16 @@ def detect_pauses_vad(wav_path: str, min_pause_ms: int, sample_rate: int = 16000
     return pauses
 
 
+def format_timestamp(seconds: float) -> str:
+    """Convert a number of seconds into a M:SS string, e.g. 125.4 -> '2:05'."""
+    minutes = int(seconds // 60)
+    secs = int(round(seconds % 60))
+    if secs == 60:
+        minutes += 1
+        secs = 0
+    return f"{minutes}:{secs:02d}"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Detect pauses in an audio/video file.")
     parser.add_argument("input", help="Path to audio or video file")
@@ -118,23 +128,21 @@ def main():
     wav_path = str(input_path.with_name(input_path.stem + "_extracted.wav"))
     min_pause_ms = int(args.min_pause * 1000)
 
-    print(f"Extracting audio from {input_path.name}...")
     extract_audio(str(input_path), wav_path)
 
-    print(f"Running '{args.method}' pause detection (min pause = {args.min_pause}s)...")
     if args.method == "energy":
         pauses = detect_pauses_energy(wav_path, min_pause_ms, args.silence_thresh)
     else:
         pauses = detect_pauses_vad(wav_path, min_pause_ms, speech_prob_thresh=args.speech_prob_thresh)
 
+    for p in pauses:
+        p["start_timestamp"] = format_timestamp(p["start"])
+
     out_path = args.out or str(input_path.with_name(input_path.stem + "_pauses.json"))
     with open(out_path, "w") as f:
         json.dump(pauses, f, indent=2)
 
-    print(f"\nFound {len(pauses)} pause(s) >= {args.min_pause}s:")
-    for p in pauses:
-        print(f"  {p['start']:.2f}s -> {p['end']:.2f}s  (duration {p['duration']:.2f}s)")
-    print(f"\nSaved to {out_path}")
+    print(", ".join(p["start_timestamp"] for p in pauses))
 
 
 if __name__ == "__main__":
