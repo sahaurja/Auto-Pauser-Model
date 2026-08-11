@@ -1,0 +1,473 @@
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+from scipy.stats import kurtosis
+from skimage.metrics import structural_similarity as ssim
+
+from pydub import AudioSegment
+from pydub.silence import detect_silence
+import soundfile as sf
+import torch
+from silero_vad import load_silero_vad, get_speech_timestamps
+
+from sentence_transformers import SentenceTransformer
+from tabulate import tabulate
+from youtube_transcript_api import YouTubeTranscriptApi
+
+
+def download_video(youtube_url, out_path="video.mp4"):
+    cmd = ["yt-dlp", "-f", "best[height<=480]", "-o", out_path, youtube_url]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed to download {youtube_url}:\n{result.stderr}")
+    return out_path
+
+
+def extract_frames(video_path, sample_rate, resize_width=320):
+    
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_interval = max(int(round(fps / sample_rate)), 1)
+
+    frames = []
+    timestamps = []
+    frame_i = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_i % frame_interval == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape
+            if w > resize_width:
+                scale = resize_width / w
+                gray = cv2.resize(gray, (resize_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+            frames.append(gray)
+            timestamps.append(frame_i / fps)
+        frame_i += 1
+    cap.release()
+    return frames, timestamps
+
+
+def compute_diff_scores(frames):
+    
+    scores = [0.0]
+    for i in range(1, len(frames)):
+        scores.append(1 - ssim(frames[i], frames[i - 1]))
+    return scores
+
+
+def get_frame_change_points(video_path, sample_rate=1.0, top_n=10, min_spacing=1.0):
+   
+    frames, timestamps = extract_frames(video_path, sample_rate)
+    frame_diff_scores = np.asarray(compute_diff_scores(frames))
+
+    if len(frame_diff_scores) == 0:
+        return []
+
+    order = np.argsort(frame_diff_scores)[::-1]
+    picked = []
+    picked_times = []
+    for i in order:
+        t = timestamps[i]
+        if any(abs(t - pt) < min_spacing for pt in picked_times):
+            continue
+        picked.append({"time": t, "score": float(frame_diff_scores[i])})
+        picked_times.append(t)
+        if len(picked) >= top_n:
+            break
+
+    return picked
+
+
+# audio change detection
+
+def extract_audio(input_path: str, out_wav: str, sample_rate: int = 16000) -> str:
+    """Use ffmpeg to pull a mono WAV track out of any audio/video file."""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-ac", "1", "-ar", str(sample_rate),
+        out_wav,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed:\n{result.stderr}")
+    return out_wav
+
+
+def detect_pauses_energy(wav_path: str, min_pause_ms: int, silence_thresh_db: int = -40):
+    """Simple, fast energy-threshold silence detection via pydub."""
+    audio = AudioSegment.from_file(wav_path)
+    ranges = detect_silence(
+        audio,
+        min_silence_len=min_pause_ms,
+        silence_thresh=silence_thresh_db,
+        seek_step=10,
+    )
+    return [
+        {"start": start / 1000, "end": end / 1000, "duration": (end - start) / 1000}
+        for start, end in ranges
+    ]
+
+
+_VAD_MODEL = None
+
+
+def _get_vad_model():
+   
+    global _VAD_MODEL
+    if _VAD_MODEL is None:
+        _VAD_MODEL = load_silero_vad()
+    return _VAD_MODEL
+
+
+def detect_pauses_vad(wav_path: str, min_pause_ms: int, sample_rate: int = 16000, speech_prob_thresh: float = 0.5):
+    """Speech/non-speech detection using Silero VAD."""
+    model = _get_vad_model()
+
+    audio, sr = sf.read(wav_path, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sr != sample_rate:
+        raise ValueError(f"Expected {sample_rate}Hz audio, got {sr}Hz — extract_audio() should have resampled it.")
+    wav = torch.from_numpy(audio)
+
+    speech_segments = get_speech_timestamps(
+        wav, model, sampling_rate=sample_rate, return_seconds=True,
+        threshold=speech_prob_thresh,
+    )
+
+    pauses = []
+    prev_end = 0.0
+    total_duration = len(wav) / sample_rate
+    for seg in speech_segments:
+        gap = seg["start"] - prev_end
+        if gap * 1000 >= min_pause_ms:
+            pauses.append({"start": prev_end, "end": seg["start"], "duration": gap})
+        prev_end = seg["end"]
+
+    trailing_gap = total_duration - prev_end
+    if trailing_gap * 1000 >= min_pause_ms:
+        pauses.append({"start": prev_end, "end": total_duration, "duration": trailing_gap})
+
+    return pauses
+
+
+def format_timestamp(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    secs = int(round(seconds % 60))
+    if secs == 60:
+        minutes += 1
+        secs = 0
+    return f"{minutes}:{secs:02d}"
+
+
+def get_audio_pause_points(input_path, min_pause=1.5, method="vad", silence_thresh_db=-40,
+                            speech_prob_thresh=0.5, wav_path=None, keep_wav=False,
+                            max_pause=None):
+   
+    input_path = Path(input_path)
+    wav_path = wav_path or str(input_path.with_name(input_path.stem + "_extracted.wav"))
+    min_pause_ms = int(min_pause * 1000)
+
+    extract_audio(str(input_path), wav_path)
+
+    if method == "energy":
+        pauses = detect_pauses_energy(wav_path, min_pause_ms, silence_thresh_db)
+    else:
+        pauses = detect_pauses_vad(wav_path, min_pause_ms, speech_prob_thresh=speech_prob_thresh)
+
+    for p in pauses:
+        p["time"] = p["start"]
+        p["start_timestamp"] = format_timestamp(p["start"])
+        if max_pause is not None:
+            p["duration"] = min(p["duration"], max_pause)
+
+    if not keep_wav:
+        try:
+            Path(wav_path).unlink()
+        except OSError:
+            pass
+
+    return pauses
+
+
+# transcript pause detection
+
+_SENTENCE_MODEL = None
+
+
+def _get_sentence_model():
+    
+    global _SENTENCE_MODEL
+    if _SENTENCE_MODEL is None:
+        _SENTENCE_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+    return _SENTENCE_MODEL
+
+
+def get_transcript_pause_points(video_id, thresh=None, min_snippet_chars=4):
+   
+    ytt_api = YouTubeTranscriptApi()
+    try:
+        fetched_transcript = ytt_api.fetch(video_id)
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch transcript for video {video_id} (captions may be disabled): {e}")
+
+    snippets = [
+        {"text": s.text, "start": s.start, "end": s.start + s.duration}
+        for s in fetched_transcript if len(s.text.strip()) >= min_snippet_chars
+    ]
+    return _transcript_similarity_pauses(snippets, thresh)
+
+
+def _transcript_similarity_pauses(snippets, thresh=None):
+    
+    if len(snippets) < 2:
+        return [], []
+
+    model = _get_sentence_model()
+    embeddings = model.encode([s["text"] for s in snippets], normalize_embeddings=True)
+
+    # embeddings are L2-normalized, so cosine similarity is just the dot product
+    sims = [float(np.dot(embeddings[i], embeddings[i + 1])) for i in range(len(snippets) - 1)]
+
+    sims_arr = np.asarray(sims)
+    if thresh is None:
+        mean, std = sims_arr.mean(), sims_arr.std() or 1.0
+        cutoff = mean - 1.0 * std  # z-score cutoff, adaptive per video
+    else:
+        cutoff = thresh
+
+    all_pauses, all_cont = [], []
+    for i, sim in enumerate(sims):
+        time_end = snippets[i]["end"]  # FIXED: was snippets[i + 1]["start"]
+        entry = {"time": time_end, "similarity": float(sim)}
+        if sim < cutoff:
+            all_pauses.append(entry)
+        else:
+            all_cont.append(entry)
+
+    return all_pauses, all_cont
+
+
+# combined auto pause detection
+
+def normalize_scores(pairs):
+    if not pairs:
+        return []
+    values = [score for _, score in pairs]
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1.0
+    return [(t, (score - lo) / span) for t, score in pairs]
+
+
+def collapse_clusters(pairs, window):
+    
+    if not pairs:
+        return []
+    pairs = sorted(pairs, key=lambda p: p[0])
+    clusters = []
+    current = [pairs[0]]
+    for t, s in pairs[1:]:
+        if t - current[-1][0] <= window:
+            current.append((t, s))
+        else:
+            clusters.append(current)
+            current = [(t, s)]
+    clusters.append(current)
+
+    result = []
+    for c in clusters:
+        total_w = sum(s for _, s in c) or 1.0
+        centroid = sum(t * s for t, s in c) / total_w
+        mean_score = sum(s for _, s in c) / len(c)
+        result.append((centroid, mean_score))
+    return result
+
+
+DEFAULT_SOURCE_WEIGHTS = {
+    # Used only as a fallback if a source has too few candidates to
+    # compute an adaptive weight for (see compute_adaptive_weight below).
+    "audio": 1.0,
+    "frame": 1.0,
+    "transcript": 0.6,
+}
+
+
+def compute_adaptive_weight(raw_scores, floor=0.3, ceiling=1.0):
+   
+    if len(raw_scores) < 4:
+        return ceiling  # too little data to judge shape — trust it fully rather than guess
+    k = kurtosis(np.asarray(raw_scores), fisher=True)
+    normalized = min(max(k / 3.0, 0.0), 1.0)  # excess kurtosis of ~3+ treated as "clearly peaked, fully confident"
+    return floor + normalized * (ceiling - floor)
+
+
+def combine_pause_points(frame_points, audio_points, transcript_points, cluster_window=4.0, top_n=10,
+                          min_score=None, min_sources=2, strong_solo_threshold=0.85,
+                          audio_weight=None, frame_weight=None, transcript_weight=None):
+   
+    normalized_frames = normalize_scores([(p["time"], p["score"]) for p in frame_points])
+    frame_pairs = collapse_clusters(normalized_frames, cluster_window)
+    normalized_audio = normalize_scores([(p["time"], p["duration"]) for p in audio_points])
+    audio_pairs = collapse_clusters(normalized_audio, cluster_window)
+    normalized_transcript = normalize_scores([(p["time"], 1 - p["similarity"]) for p in transcript_points])
+    transcript_pairs = collapse_clusters(normalized_transcript, cluster_window)
+
+    resolved_weights = {
+        "frame": frame_weight if frame_weight is not None else compute_adaptive_weight([s for _, s in normalized_frames]),
+        "audio": audio_weight if audio_weight is not None else compute_adaptive_weight([s for _, s in normalized_audio]),
+        "transcript": transcript_weight if transcript_weight is not None else compute_adaptive_weight([s for _, s in normalized_transcript]),
+    }
+
+    candidates = (
+        [(t, raw * resolved_weights["frame"], "frame", raw) for t, raw in frame_pairs]
+        + [(t, raw * resolved_weights["audio"], "audio", raw) for t, raw in audio_pairs]
+        + [(t, raw * resolved_weights["transcript"], "transcript", raw) for t, raw in transcript_pairs]
+    )
+    candidates.sort(key=lambda c: c[0])
+
+    clusters = []
+    current = []
+    for cand in candidates:
+        if current and cand[0] - current[-1][0] > cluster_window:
+            clusters.append(current)
+            current = []
+        current.append(cand)
+    if current:
+        clusters.append(current)
+
+    combined = []
+    for cluster in clusters:
+        sources = sorted({c[2] for c in cluster})
+        is_strong_solo = len(sources) == 1 and max(c[3] for c in cluster) >= strong_solo_threshold
+        if len(sources) < min_sources and not is_strong_solo:
+            continue  # not enough agreement, and not confident enough on its own — drop it
+
+        audio_times = [c[0] for c in cluster if c[2] == "audio"]
+        anchor_time = (sum(audio_times) / len(audio_times)) if audio_times else (sum(c[0] for c in cluster) / len(cluster))
+
+        scores = [c[1] for c in cluster]
+        score_sum = sum(scores)
+        agreement_boost = 1 + 0.5 * (len(sources) - 1)
+        combined.append({
+            "time": anchor_time,
+            "sources": sources,
+            "combined_score": score_sum * agreement_boost,
+        })
+
+    combined.sort(key=lambda c: c["combined_score"], reverse=True)
+
+    if min_score is not None:
+        combined = [c for c in combined if c["combined_score"] >= min_score]
+
+    top = combined[:top_n]
+    top.sort(key=lambda c: c["time"])  # final output ordered by time, not score, so a viewer reading the list top-to-bottom gets it in playback order
+    for p in top:
+        p["timestamp"] = format_timestamp(p["time"])
+    return top, resolved_weights
+
+
+def find_pause_points(youtube_url_or_id, sample_rate=1.0, min_pause=1.5, audio_method="vad",
+                       cluster_window=4.0, top_n=10, keep_video=True, min_score=None, min_sources=2,
+                       strong_solo_threshold=0.85, audio_weight=None, frame_weight=None, transcript_weight=None):
+    s = youtube_url_or_id.strip()
+    video_id = None
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", s):
+        video_id = s
+    m = re.search(r"(?:v=|be/|embed/|shorts/)([A-Za-z0-9_-]{11})", s)
+    if m:
+        video_id = m.group(1)
+    if not video_id:
+        raise ValueError(f"Could not extract a YouTube video ID from: {youtube_url_or_id!r}")
+
+    youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    video_path = download_video(youtube_url, out_path=f"{video_id}.mp4")
+
+    # FIXED: get_frame_change_points() used to be called with top_n=top_n,
+    # meaning if you wanted 10 final pause points, only 10 raw frame-diff
+    # candidates ever existed in the first place. Since combine_pause_points
+    # now requires min_sources agreeing candidates in the same
+    # cluster_window, starving the frame pool down to the final output size
+    # left almost no room for a frame candidate to actually land near an
+    # audio or transcript candidate — this was the other big driver of
+    # "too few points." Generate a much larger raw candidate pool here and
+    # let combine_pause_points do the real trimming down to top_n at the end.
+    frame_candidate_n = max(top_n * 5, 40)
+    frame_points = get_frame_change_points(video_path, sample_rate=sample_rate, top_n=frame_candidate_n)
+    audio_points = get_audio_pause_points(video_path, min_pause=min_pause, method=audio_method, max_pause=15.0)
+
+    try:
+        transcript_points, _ = get_transcript_pause_points(video_id)
+    except RuntimeError as e:
+        print(f"Warning: {e} — continuing with audio + frame signals only.", file=sys.stderr)
+        transcript_points = []
+
+    combined, resolved_weights = combine_pause_points(
+        frame_points, audio_points, transcript_points,
+        cluster_window=cluster_window, top_n=top_n, min_score=min_score, min_sources=min_sources,
+        strong_solo_threshold=strong_solo_threshold,
+        audio_weight=audio_weight, frame_weight=frame_weight, transcript_weight=transcript_weight,
+    )
+
+    if not keep_video:
+        try:
+            Path(video_path).unlink()
+        except OSError:
+            pass
+
+    return {
+        "video_id": video_id,
+        "pause_points": combined,
+        "weights_used": resolved_weights,
+        "raw": {
+            "frame": frame_points,
+            "audio": audio_points,
+            "transcript": transcript_points,
+        },
+    }
+
+
+def combined_pause_detection():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("url", help="YouTube URL or video ID")
+    parser.add_argument("--sample-rate", type=float, default=1.0)
+    parser.add_argument("--min-pause", type=float, default=1.5)
+    parser.add_argument("--audio-method", choices=["energy", "vad"], default="vad")
+    parser.add_argument("--cluster-window", type=float, default=4.0)
+    parser.add_argument("--top-n", type=int, default=10)
+    parser.add_argument("--min-score", type=float, default=None, help="Drop combined points scoring below this (in addition to top-n)")
+    parser.add_argument("--min-sources", type=int, default=2, help="Minimum number of distinct signals (audio/frame/transcript) that must agree for a point to count (default 2)")
+    parser.add_argument("--strong-solo-threshold", type=float, default=0.85, help="A single signal this confident (0-1) counts as a pause point even without a second signal agreeing (default 0.85)")
+    parser.add_argument("--audio-weight", type=float, default=None, help="Pin audio's trust level (0-1) manually. Default: auto-computed per video.")
+    parser.add_argument("--frame-weight", type=float, default=None, help="Pin frame-diff's trust level (0-1) manually. Default: auto-computed per video.")
+    parser.add_argument("--transcript-weight", type=float, default=None, help="Pin transcript's trust level (0-1) manually. Default: auto-computed per video.")
+    parser.add_argument("--keep-video", action="store_true", default=True)
+    parser.add_argument("--no-keep-video", dest="keep_video", action="store_false")
+    args = parser.parse_args()
+
+    result = find_pause_points(
+        args.url, args.sample_rate, args.min_pause, args.audio_method,
+        args.cluster_window, args.top_n, args.keep_video, args.min_score, args.min_sources,
+        args.strong_solo_threshold, args.audio_weight, args.frame_weight, args.transcript_weight,
+    )
+
+    rows = [
+        {"timestamp": p["timestamp"], "sources": ", ".join(p["sources"]), "score": round(p["combined_score"], 3)}
+        for p in result["pause_points"]
+    ]
+    print(f"Video: {result['video_id']}")
+    w = result["weights_used"]
+    print(f"Weights used — audio: {w['audio']:.2f}, frame: {w['frame']:.2f}, transcript: {w['transcript']:.2f}")
+    print(tabulate(rows, headers="keys", tablefmt="psql"))
+
+
+if __name__ == "__main__":
+    combined_pause_detection()
