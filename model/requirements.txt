@@ -1,0 +1,16 @@
+
+ChatGPT said:
+python-dotenv
+opencv-python
+scikit-image
+numpy
+pydub
+soundfile
+torch
+torchaudio
+silero-vad
+spacy
+tabulate
+pandas
+youtube-transcript-api
+google-genai

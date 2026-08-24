@@ -8,12 +8,12 @@ from typing import List, Dict, Any
 
 import numpy as np
 
-from audio_change_detector.audio import (
+from model.audio_change_detector.audio import (
     detect_pauses_energy,
     detect_pauses_vad,
     extract_audio,
 )
-from frame_change_detector.frames import (
+from model.frame_change_detector.frames import (
     compute_diff_scores,
     download_video,
     extract_frames,
