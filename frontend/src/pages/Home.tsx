@@ -4,14 +4,16 @@ import { Link2, MessageCircleQuestion, UploadCloud } from 'lucide-react'
 import { NavBar } from '../components/NavBar'
 import { HomeIllustration } from '../components/HomeIllustration'
 import { isValidYouTubeUrl } from '../mock/mockData'
+import { startProcessing } from '../api/backend'
 
 export function Home() {
   const navigate = useNavigate()
   const [url, setUrl] = useState('')
   const [generateQuestions, setGenerateQuestions] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
 
     if (!isValidYouTubeUrl(url)) {
@@ -20,9 +22,14 @@ export function Home() {
     }
 
     setError(null)
-    navigate('/loading', {
-      state: { youtubeUrl: url.trim(), generateQuestions },
-    })
+    setSubmitting(true)
+    try {
+      const { jobId } = await startProcessing(url.trim(), generateQuestions)
+      navigate('/loading', { state: { jobId, generateQuestions } })
+    } catch {
+      setError('Could not reach the processing service. Please try again.')
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -85,9 +92,9 @@ export function Home() {
             </div>
           </div>
 
-          <button type="submit" className="btn-primary">
+          <button type="submit" className="btn-primary" disabled={submitting}>
             <UploadCloud size={20} />
-            Submit
+            {submitting ? 'Starting…' : 'Submit'}
           </button>
         </form>
       </div>

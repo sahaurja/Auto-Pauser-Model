@@ -1,0 +1,19 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+
+# model/smriti_combined_model.py's own dependencies — this backend imports
+# that file directly, so its imports must be satisfiable in this env too.
+opencv-python
+scikit-image
+numpy
+pydub
+soundfile
+torch
+torchaudio
+silero-vad
+spacy
+tabulate
+pandas
+youtube-transcript-api
+google-generativeai

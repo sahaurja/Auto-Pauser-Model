@@ -1,39 +1,90 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { generateMockResult } from '../mock/mockData'
 import { useLibrary } from '../context/LibraryContext'
+import { getProcessingResult, getProcessingStatus } from '../api/backend'
 
 interface LoadingState {
-  youtubeUrl: string
-  generateQuestions: boolean
+  jobId: string
+  generateQuestions?: boolean
 }
+
+const POLL_INTERVAL_MS = 4000
 
 export function Loading() {
   const location = useLocation()
   const navigate = useNavigate()
   const { addVideo } = useLibrary()
   const state = location.state as LoadingState | null
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!state?.youtubeUrl) {
+    if (!state?.jobId) {
       navigate('/home', { replace: true })
       return
     }
 
-    const timer = setTimeout(() => {
-      const result = generateMockResult(state.youtubeUrl, state.generateQuestions)
-      addVideo(result)
-      navigate('/video', { state: { videoId: result.videoId }, replace: true })
-    }, 2200)
+    const jobId = state.jobId
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
 
-    return () => clearTimeout(timer)
+    const poll = async () => {
+      try {
+        const statusResult = await getProcessingStatus(jobId)
+        if (cancelled) return
+
+        if (statusResult.status === 'error') {
+          setError(
+            statusResult.error ?? 'Something went wrong while processing this video.',
+          )
+          return
+        }
+
+        if (statusResult.status === 'done') {
+          const result = await getProcessingResult(jobId)
+          if (cancelled) return
+          addVideo(result)
+          navigate('/video', { state: { videoId: result.videoId }, replace: true })
+          return
+        }
+
+        timer = setTimeout(poll, POLL_INTERVAL_MS)
+      } catch {
+        if (!cancelled) {
+          setError('Lost connection to the processing service.')
+        }
+      }
+    }
+
+    poll()
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  if (error) {
+    return (
+      <div className="loading-page">
+        <p className="error-text">{error}</p>
+        <button
+          className="btn-primary"
+          onClick={() => navigate('/home', { replace: true })}
+        >
+          Back to Home
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="loading-page">
       <div className="spinner" />
-      <p>Finding the best moments to pause and generating questions...</p>
+      <p>
+        Finding the best moments to pause
+        {state?.generateQuestions !== false ? ' and generating questions' : ''}...
+      </p>
     </div>
   )
 }

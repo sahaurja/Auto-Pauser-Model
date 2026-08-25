@@ -13,4 +13,4 @@ spacy
 tabulate
 pandas
 youtube-transcript-api
-google-genai
+google-generativeai
