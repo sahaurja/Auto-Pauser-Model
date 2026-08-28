@@ -21,7 +21,7 @@ export function NavBar() {
         <ul className="navbar-links">
           <li>
             <NavLink to="/home">
-              <House size={20} />
+              <House size={20} className="nav-icon-home" />
               Home
             </NavLink>
           </li>
