@@ -3,28 +3,47 @@ import { useNavigate } from 'react-router-dom'
 import { Link2, MessageCircleQuestion, UploadCloud } from 'lucide-react'
 import { NavBar } from '../components/NavBar'
 import { HomeIllustration } from '../components/HomeIllustration'
-import { isValidYouTubeUrl } from '../mock/mockData'
+import { extractYouTubeId, isValidYouTubeUrl } from '../mock/mockData'
 import { startProcessing } from '../api/backend'
+import { useLibrary } from '../context/LibraryContext'
 
 export function Home() {
   const navigate = useNavigate()
+  const { videos } = useLibrary()
   const [url, setUrl] = useState('')
   const [generateQuestions, setGenerateQuestions] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [duplicateVideoId, setDuplicateVideoId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
+    const trimmedUrl = url.trim()
 
-    if (!isValidYouTubeUrl(url)) {
+    if (!isValidYouTubeUrl(trimmedUrl)) {
+      setDuplicateVideoId(null)
       setError('Please enter a valid YouTube video URL.')
       return
     }
 
+    // Check the library immediately, before kicking off a (possibly slow)
+    // processing job, so a resubmitted video gets instant feedback instead
+    // of only being caught once processing finishes.
+    const videoId = extractYouTubeId(trimmedUrl)
+    const existing = videos.find(
+      (v) => v.videoId === videoId || v.youtubeUrl === trimmedUrl,
+    )
+    if (existing) {
+      setDuplicateVideoId(existing.videoId)
+      setError('This video is already in your library.')
+      return
+    }
+
     setError(null)
+    setDuplicateVideoId(null)
     setSubmitting(true)
     try {
-      const { jobId } = await startProcessing(url.trim(), generateQuestions)
+      const { jobId } = await startProcessing(trimmedUrl, generateQuestions)
       navigate('/loading', { state: { jobId, generateQuestions } })
     } catch {
       setError('Could not reach the processing service. Please try again.')
@@ -63,10 +82,23 @@ export function Home() {
                 className="text-field"
                 placeholder="https://www.youtube.com/watch?v=..."
                 value={url}
-                onChange={(e) => setUrl(e.target.value)}
+                onChange={(e) => {
+                  setUrl(e.target.value)
+                  setError(null)
+                  setDuplicateVideoId(null)
+                }}
               />
             </div>
             {error && <p className="error-text">{error}</p>}
+            {duplicateVideoId && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => navigate('/video', { state: { videoId: duplicateVideoId } })}
+              >
+                View video
+              </button>
+            )}
           </div>
 
           <div className="home-toggle-row">

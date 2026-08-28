@@ -17,6 +17,7 @@ export function Loading() {
   const { addVideo } = useLibrary()
   const state = location.state as LoadingState | null
   const [error, setError] = useState<string | null>(null)
+  const [duplicateVideoId, setDuplicateVideoId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!state?.jobId) {
@@ -43,8 +44,12 @@ export function Loading() {
         if (statusResult.status === 'done') {
           const result = await getProcessingResult(jobId)
           if (cancelled) return
-          addVideo(result)
-          navigate('/video', { state: { videoId: result.videoId }, replace: true })
+          const { video, isDuplicate } = addVideo(result)
+          if (isDuplicate) {
+            setDuplicateVideoId(video.videoId)
+            return
+          }
+          navigate('/video', { state: { videoId: video.videoId }, replace: true })
           return
         }
 
@@ -74,6 +79,22 @@ export function Loading() {
           onClick={() => navigate('/home', { replace: true })}
         >
           Back to Home
+        </button>
+      </div>
+    )
+  }
+
+  if (duplicateVideoId) {
+    return (
+      <div className="loading-page">
+        <p>This video is already in your library.</p>
+        <button
+          className="btn-primary"
+          onClick={() =>
+            navigate('/video', { state: { videoId: duplicateVideoId }, replace: true })
+          }
+        >
+          View video
         </button>
       </div>
     )

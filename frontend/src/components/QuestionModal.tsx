@@ -29,8 +29,8 @@ export function QuestionModal({ question, onAnswer, onContinue }: QuestionModalP
   }
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true">
-      <div className="modal-card card">
+    <div className="question-overlay" role="dialog" aria-modal="true">
+      <div className="question-card card">
         <div className="modal-peeking-bear">
           <TeddyBear pose="peeking" size={110} />
         </div>

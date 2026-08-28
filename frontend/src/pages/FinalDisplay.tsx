@@ -148,14 +148,15 @@ export function FinalDisplay() {
           <h1>{video.title}</h1>
         </div>
 
-        <div className="video-wrapper">
-          <YouTube
-            videoId={video.videoId}
-            opts={opts}
-            onReady={handleReady}
-            onEnd={handleEnd}
-          />
-        </div>
+        <YouTube
+          videoId={video.videoId}
+          className="video-wrapper"
+          iframeClassName="video-iframe"
+          opts={opts}
+          onReady={handleReady}
+          onEnd={handleEnd}
+        />
+        
 
         {duration > 0 && (
           <div className="pause-track">

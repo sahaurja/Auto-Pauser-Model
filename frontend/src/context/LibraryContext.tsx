@@ -17,9 +17,14 @@ import type { ProcessedVideo, ProcessedVideoData } from '../types'
 import { useAuth } from './AuthContext'
 import { db, isFirebaseConfigured } from '../firebase'
 
+export interface AddVideoResult {
+  video: ProcessedVideo
+  isDuplicate: boolean
+}
+
 interface LibraryContextValue {
   videos: ProcessedVideo[]
-  addVideo: (video: ProcessedVideoData) => void
+  addVideo: (video: ProcessedVideoData) => AddVideoResult
   getVideo: (videoId: string) => ProcessedVideo | undefined
 }
 
@@ -101,8 +106,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     setVideos(store[userId] ?? [])
   }, [userId])
 
-  const addVideo = (video: ProcessedVideoData) => {
-    if (!userId) return
+  // A video is a duplicate if this user already has it, matched by YouTube
+  // video ID (covers different URL formats for the same video) or the raw
+  // URL as a fallback.
+  const addVideo = (video: ProcessedVideoData): AddVideoResult => {
+    if (!userId) {
+      return { video: { ...video, userId: '' }, isDuplicate: false }
+    }
+
+    const existing = videos.find(
+      (v) => v.videoId === video.videoId || v.youtubeUrl === video.youtubeUrl,
+    )
+    if (existing) {
+      return { video: existing, isDuplicate: true }
+    }
+
     const withUser: ProcessedVideo = { ...video, userId }
 
     // Optimistic local update so getVideo() finds it immediately, without
@@ -121,6 +139,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       }
       saveLocalStore(next)
     }
+
+    return { video: withUser, isDuplicate: false }
   }
 
   const getVideo = (videoId: string) => videos.find((v) => v.videoId === videoId)
