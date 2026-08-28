@@ -2,13 +2,14 @@ fastapi
 uvicorn[standard]
 python-dotenv
 
-# model/smriti_combined_model.py's own dependencies — this backend imports
+# model/combined_model_final.py's own dependencies — this backend imports
 # that file directly, so its imports must be satisfiable in this env too.
 opencv-python
 scikit-image
 numpy
 pydub
 soundfile
+audioop-lts; python_version >= "3.13"  # stdlib audioop was removed in 3.13; pydub needs this backport
 torch
 torchaudio
 silero-vad

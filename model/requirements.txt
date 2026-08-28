@@ -1,5 +1,3 @@
-
-ChatGPT said:
 python-dotenv
 opencv-python
 scikit-image

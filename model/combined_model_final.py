@@ -14,6 +14,10 @@ import subprocess
 import sys
 import os
 import time
+# --- EDIT (2026-08-27): needed for shuffling MCQ answer order and for
+# randomly selecting which pause points get a question. ---
+import random
+# --- END EDIT ---
 from pathlib import Path
 
 from pydub import AudioSegment
@@ -60,6 +64,19 @@ def compute_diff_scores(frames):
         # scores.append(np.mean(cv2.absdiff(frames[i], frames[i-1])))
         scores.append(1 - ssim(frames[i], frames[i-1]))
     return scores
+
+# --- EDIT (2026-08-27): new helper — video length now feeds into how many
+# pause points combine_pause_points() returns (see that function below). ---
+def get_video_duration(video_path):
+    """Total video duration in seconds, or None if it can't be read."""
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    cap.release()
+    if not fps or fps <= 0:
+        return None
+    return frame_count / fps
+# --- END EDIT ---
 
 def get_frame_change_points(video_path, sample_rate=1.0, top_n=10):
     frames, timestamps = extract_frames(video_path, sample_rate)
@@ -228,7 +245,14 @@ def collapse_clusters(pairs, window):
     clusters.append(current)
     return [max(c, key=lambda x: x[1]) for c in clusters]
 
-def combine_pause_points(frame_points, audio_points, transcript_points, cluster_window=4.0, top_n=10):
+# --- EDIT (2026-08-27): added score_threshold/video_duration/points_per_second
+# params so the number of returned pause points can scale with video length
+# and a minimum-score bar, instead of always being a flat top_n. top_n is
+# kept as the fallback behavior when video_duration isn't supplied, so any
+# other existing caller of this function is unaffected. ---
+def combine_pause_points(frame_points, audio_points, transcript_points, cluster_window=4.0, top_n=10,
+                          score_threshold=0.6, video_duration=None, points_per_second=1 / 45):
+# --- END EDIT ---
     normalized_frames = normalize_scores([(p["time"], p["score"]) for p in frame_points])
     frame_pairs = collapse_clusters(normalized_frames, cluster_window)
     normalized_audio = normalize_scores([(p["time"], p["duration"]) for p in audio_points])
@@ -263,7 +287,21 @@ def combine_pause_points(frame_points, audio_points, transcript_points, cluster_
         })
 
     combined.sort(key=lambda c: c["combined_score"], reverse=True)
-    top = combined[:top_n]
+
+    # --- EDIT (2026-08-27): was a flat `top = combined[:top_n]`. Now: keep
+    # only clusters scoring above score_threshold, and size the result off
+    # video length (~1 pause point per points_per_second^-1 seconds, min 3)
+    # instead of a fixed count. Falls back to the exact old behavior if the
+    # caller doesn't pass video_duration.
+    # OLD: top = combined[:top_n]
+    above_threshold = [c for c in combined if c["combined_score"] > score_threshold]
+    if video_duration:
+        max_points = max(3, round(video_duration * points_per_second))
+        top = above_threshold[:max_points]
+    else:
+        top = combined[:top_n]
+    # --- END EDIT ---
+
     for p in top:
         p["timestamp"] = format_timestamp(p["time"])
     return top
@@ -297,22 +335,48 @@ def generate_mcq(transcript_text, max_retries=2):
     if not transcript_text or len(transcript_text.split()) < 1:
         return None
 
+    # prompt = f"""You are creating a comprehension check for a video-based lesson.
+    # Based ONLY on the following transcript excerpt, write one multiple-choice question
+    # that tests whether a viewer understood the key point of this section. Do not
+    # reference "the transcript" or "the excerpt" in the question itself.
+    #
+    # Transcript excerpt:
+    # \"\"\"{transcript_text}\"\"\"
+    #
+    # Return JSON in exactly this shape:
+    # {{
+    #   "question": "...",
+    #   "choices": ["...", "...", "...", "..."],
+    #   "correct_index": 0,
+    #   "explanation": "..."
+    # }}
+    # correct_index is the 0-based index into choices of the right answer."""
     prompt = f"""You are creating a comprehension check for a video-based lesson.
-Based ONLY on the following transcript excerpt, write one multiple-choice question
-that tests whether a viewer understood the key point of this section. Do not
-reference "the transcript" or "the excerpt" in the question itself.
+
+Based on the following transcript excerpt, write one multiple-choice question
+that tests whether a viewer understood and can apply or reason about the key
+idea of this section — not whether they can recall the exact wording.
+
+Requirements:
+- Do NOT quote or closely paraphrase a sentence from the transcript as the
+  question or as an answer choice. Ask about the underlying concept, a
+  cause/effect relationship, an application, or an inference a viewer who
+  understood this section could make — not a fact lookup.
+- Do not reference "the transcript", "the excerpt", or "this section" in the
+  question itself; phrase it as a standalone question about the topic.
+- Write three plausible, distinct wrong answers (not obviously silly), so the
+  question isn't trivially guessable.
 
 Transcript excerpt:
 \"\"\"{transcript_text}\"\"\"
 
 Return JSON in exactly this shape:
 {{
-  "question": "...",
-  "choices": ["...", "...", "...", "..."],
-  "correct_index": 0,
-  "explanation": "..."
-}}
-correct_index is the 0-based index into choices of the right answer."""
+  "question": "<the question text>",
+  "choices": ["<choice>", "<choice>", "<choice>", "<choice>"],
+  "correct_index": <integer 0-3, the position of the correct choice>,
+  "explanation": "<why the correct choice is right>"
+}}"""
 
     model = get_question_model()
     for attempt in range(max_retries + 1):
@@ -322,6 +386,13 @@ correct_index is the 0-based index into choices of the right answer."""
             data = json.loads(response.text)
             assert len(data["choices"]) == 4
             assert 0 <= data["correct_index"] < 4
+
+            correct_choice = data["choices"][data["correct_index"]]
+            shuffled_choices = data["choices"][:]
+            random.shuffle(shuffled_choices)
+            data["choices"] = shuffled_choices
+            data["correct_index"] = shuffled_choices.index(correct_choice)
+
             return data
         except Exception as e:
             is_rate_limit = "429" in str(e) or "quota" in str(e).lower()
@@ -332,12 +403,23 @@ correct_index is the 0-based index into choices of the right answer."""
     return None
 
 
-def attach_questions(pause_points, raw_transcript):
+def attach_questions(pause_points, raw_transcript, question_coverage_range=(0.6, 0.7)):
     sorted_points = sorted(pause_points, key=lambda p: p["time"])
+
+    coverage = random.uniform(*question_coverage_range)
+    num_with_questions = round(len(sorted_points) * coverage)
+    question_indices = set(
+        random.sample(range(len(sorted_points)), num_with_questions)
+    ) if sorted_points else set()
+
     prev_time = 0.0
-    for p in sorted_points:
+    # for p in sorted_points:
+    #     text = get_transcript_text_between(raw_transcript, prev_time, p["time"])
+    #     p["question"] = generate_mcq(text)
+    #     prev_time = p["time"]
+    for i, p in enumerate(sorted_points):
         text = get_transcript_text_between(raw_transcript, prev_time, p["time"])
-        p["question"] = generate_mcq(text)
+        p["question"] = generate_mcq(text) if i in question_indices else None
         prev_time = p["time"]
     return pause_points
 
@@ -355,13 +437,18 @@ def find_pause_points(youtube_url_or_id, sample_rate=1.0, min_pause=1.5, audio_m
     youtube_url = f"https://www.youtube.com/watch?v={video_id}"
 
     video_path = download_video(youtube_url, out_path=f"{video_id}.mp4")
+    video_duration = get_video_duration(video_path)
 
     frame_points = get_frame_change_points(video_path, sample_rate=sample_rate, top_n=top_n)
     audio_points = get_audio_pause_points(video_path, min_pause=min_pause, method=audio_method)
     raw_transcript = get_full_transcript(video_id)
     transcript_points, _ = get_transcript_pause_points(raw_transcript)
 
-    combined = combine_pause_points(frame_points, audio_points, transcript_points, cluster_window=cluster_window, top_n=top_n)
+    # combined = combine_pause_points(frame_points, audio_points, transcript_points, cluster_window=cluster_window, top_n=top_n)
+    combined = combine_pause_points(
+        frame_points, audio_points, transcript_points,
+        cluster_window=cluster_window, top_n=top_n, video_duration=video_duration,
+    )
 
     if generate_questions:
         combined = attach_questions(combined, raw_transcript)
