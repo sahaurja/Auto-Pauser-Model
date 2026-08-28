@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Play } from 'lucide-react'
 import type { Question } from '../types'
+import { TeddyBear } from './TeddyBear'
+import { Star } from './Star'
 
 interface QuestionModalProps {
   question: Question
@@ -29,6 +31,9 @@ export function QuestionModal({ question, onAnswer, onContinue }: QuestionModalP
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true">
       <div className="modal-card card">
+        <div className="modal-peeking-bear">
+          <TeddyBear pose="peeking" size={110} />
+        </div>
         <h2>{question.prompt}</h2>
         <div className="choice-list">
           {question.choices.map((choice, index) => (
@@ -46,7 +51,8 @@ export function QuestionModal({ question, onAnswer, onContinue }: QuestionModalP
         {selected !== null && (
           <>
             <p className={`feedback-banner ${isCorrect ? 'correct' : 'incorrect'}`}>
-              {isCorrect ? 'Correct!' : 'Not quite.'}
+              {isCorrect && <Star size={16} />}
+              {isCorrect ? 'Correct!' : "Not quite — let's think about it."}
             </p>
             <p>{question.explanation}</p>
             <button className="btn-primary" onClick={onContinue}>

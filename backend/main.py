@@ -115,7 +115,13 @@ def _to_frontend_shape(raw: dict, youtube_url: str) -> dict:
 def _run_job(job_id: str, youtube_url: str, generate_questions: bool) -> None:
     job = jobs[job_id]
     try:
-        raw = find_pause_points(youtube_url, generate_questions=generate_questions)
+        # keep_video=False: find_pause_points() defaults to keeping the
+        # downloaded .mp4 on disk, which would otherwise pile up in this
+        # process's cwd on every job. The video is only needed transiently
+        # for frame/audio analysis, so delete it once that's done.
+        raw = find_pause_points(
+            youtube_url, generate_questions=generate_questions, keep_video=False
+        )
         job.result = _to_frontend_shape(raw, youtube_url)
         job.status = "done"
     except Exception as exc:  # noqa: BLE001 - surface any failure to the client

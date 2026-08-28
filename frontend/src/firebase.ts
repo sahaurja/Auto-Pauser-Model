@@ -1,5 +1,6 @@
-import { initializeApp } from 'firebase/app'
+import { initializeApp, type FirebaseApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
+import { getFirestore } from 'firebase/firestore'
 
 /**
  * PLACEHOLDER CONFIG — do not hardcode real values here.
@@ -18,9 +19,13 @@ const firebaseConfig = {
 
 export const isFirebaseConfigured = Boolean(firebaseConfig.apiKey)
 
+const app: FirebaseApp | null = isFirebaseConfigured ? initializeApp(firebaseConfig) : null
+
 /**
- * `auth` is only initialized when real Firebase credentials are present in
- * .env.local. Without them, AuthContext falls back to a mock in-memory auth
- * implementation so the UI stays fully demoable before Firebase is set up.
+ * `auth`/`db` are only initialized when real Firebase credentials are present
+ * in .env.local. Without them, AuthContext and LibraryContext fall back to
+ * mock in-memory auth / localStorage so the UI stays fully demoable before
+ * Firebase is set up.
  */
-export const auth = isFirebaseConfigured ? getAuth(initializeApp(firebaseConfig)) : null
+export const auth = app ? getAuth(app) : null
+export const db = app ? getFirestore(app) : null

@@ -1,4 +1,5 @@
-import { CircleCheck, CircleX, PartyPopper } from 'lucide-react'
+import { CircleCheck, CircleX } from 'lucide-react'
+import { TeddyBear } from './TeddyBear'
 
 export interface QuestionResult {
   prompt: string
@@ -21,7 +22,7 @@ export function QuestionSummaryModal({ results, onDone }: QuestionSummaryModalPr
     <div className="modal-overlay" role="dialog" aria-modal="true">
       <div className="modal-card card summary-card">
         <div className="summary-headline">
-          <PartyPopper size={28} color="#0853d1" />
+          <TeddyBear pose="celebrating" size={64} />
           <h2>
             {total > 0
               ? `You got ${correctCount}/${total} correct`
@@ -37,9 +38,9 @@ export function QuestionSummaryModal({ results, onDone }: QuestionSummaryModalPr
                 <div className="summary-item" key={index}>
                   <div className="summary-item-header">
                     {isCorrect ? (
-                      <CircleCheck size={20} color="#2e7d32" />
+                      <CircleCheck size={20} color="var(--color-success)" />
                     ) : (
-                      <CircleX size={20} color="#b3261e" />
+                      <CircleX size={20} color="var(--color-error)" />
                     )}
                     <p className="summary-prompt">{result.prompt}</p>
                   </div>

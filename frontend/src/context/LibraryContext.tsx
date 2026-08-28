@@ -5,9 +5,17 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import {
+  collection,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  setDoc,
+} from 'firebase/firestore'
 import type { ProcessedVideo, ProcessedVideoData } from '../types'
-import { mockVideos } from '../mock/mockData'
 import { useAuth } from './AuthContext'
+import { db, isFirebaseConfigured } from '../firebase'
 
 interface LibraryContextValue {
   videos: ProcessedVideo[]
@@ -19,10 +27,11 @@ const LibraryContext = createContext<LibraryContextValue | undefined>(undefined)
 
 const STORAGE_KEY = 'cadence_library'
 
-/** userId -> that user's processed videos, persisted so a refresh keeps it. */
+/** userId -> that user's processed videos. Only used by the localStorage
+ * fallback path (no Firebase project configured — see firebase.ts). */
 type LibraryStore = Record<string, ProcessedVideo[]>
 
-function loadStore(): LibraryStore {
+function loadLocalStore(): LibraryStore {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as LibraryStore
   } catch {
@@ -30,44 +39,88 @@ function loadStore(): LibraryStore {
   }
 }
 
-function saveStore(store: LibraryStore) {
+function saveLocalStore(store: LibraryStore) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+}
+
+function withoutDuplicate(videos: ProcessedVideo[], videoId: string) {
+  return videos.filter((v) => v.videoId !== videoId)
 }
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const userId = user?.uid ?? null
-  const [store, setStore] = useState<LibraryStore>(() => loadStore())
+  const [videos, setVideos] = useState<ProcessedVideo[]>([])
 
-  // First time a given user is seen, seed their library with the mock
-  // catalog so the app stays demoable. Later videos they process are added
-  // on top of that. Each user's list is stored independently.
+  // Firestore-backed path — used whenever a real Firebase project is
+  // configured. Library lives at users/{userId}/videos/{videoId}, so it
+  // syncs across devices/browsers for that user instead of being stuck in
+  // one browser's localStorage.
   useEffect(() => {
-    if (!userId) return
+    if (!isFirebaseConfigured || !db) return
 
-    setStore((prev) => {
-      if (prev[userId]) return prev
-      const seeded: LibraryStore = {
-        ...prev,
-        [userId]: mockVideos.map((video) => ({ ...video, userId })),
-      }
-      saveStore(seeded)
-      return seeded
+    if (!userId) {
+      setVideos([])
+      return
+    }
+
+    let cancelled = false
+    const firestore = db
+
+    const load = async () => {
+      const videosRef = collection(firestore, 'users', userId, 'videos')
+      const snapshot = await getDocs(query(videosRef, orderBy('processedDate', 'desc')))
+      if (cancelled) return
+
+      setVideos(
+        snapshot.docs.map((d) => ({ ...(d.data() as ProcessedVideoData), userId })),
+      )
+    }
+
+    load().catch((err) => {
+      console.error('[Cadence] Failed to load library from Firestore', err)
     })
+
+    return () => {
+      cancelled = true
+    }
   }, [userId])
 
-  const videos = userId ? (store[userId] ?? []) : []
+  // localStorage fallback — only runs when Firebase hasn't been configured
+  // (mock auth mode, see AuthContext), so the app stays demoable without a
+  // real Firebase project.
+  useEffect(() => {
+    if (isFirebaseConfigured) return
+
+    if (!userId) {
+      setVideos([])
+      return
+    }
+
+    const store = loadLocalStore()
+    setVideos(store[userId] ?? [])
+  }, [userId])
 
   const addVideo = (video: ProcessedVideoData) => {
     if (!userId) return
-    setStore((prev) => {
+    const withUser: ProcessedVideo = { ...video, userId }
+
+    // Optimistic local update so getVideo() finds it immediately, without
+    // waiting on a Firestore round-trip.
+    setVideos((prev) => [withUser, ...withoutDuplicate(prev, video.videoId)])
+
+    if (isFirebaseConfigured && db) {
+      setDoc(doc(db, 'users', userId, 'videos', video.videoId), video).catch((err) => {
+        console.error('[Cadence] Failed to save video to Firestore', err)
+      })
+    } else {
+      const store = loadLocalStore()
       const next: LibraryStore = {
-        ...prev,
-        [userId]: [{ ...video, userId }, ...(prev[userId] ?? [])],
+        ...store,
+        [userId]: [withUser, ...withoutDuplicate(store[userId] ?? [], video.videoId)],
       }
-      saveStore(next)
-      return next
-    })
+      saveLocalStore(next)
+    }
   }
 
   const getVideo = (videoId: string) => videos.find((v) => v.videoId === videoId)

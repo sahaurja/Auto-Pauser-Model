@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useLibrary } from '../context/LibraryContext'
 import { getProcessingResult, getProcessingStatus } from '../api/backend'
+import { TeddyBear } from '../components/TeddyBear'
 
 interface LoadingState {
   jobId: string
@@ -80,7 +81,7 @@ export function Loading() {
 
   return (
     <div className="loading-page">
-      <div className="spinner" />
+      <TeddyBear pose="reading" size={140} animated />
       <p>
         Finding the best moments to pause
         {state?.generateQuestions !== false ? ' and generating questions' : ''}...
