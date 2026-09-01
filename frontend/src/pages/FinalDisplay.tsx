@@ -213,6 +213,13 @@ export function FinalDisplay() {
               onContinue={resumeFromPause}
             />
           )}
+
+          {videoEnded && (
+            <QuestionSummaryModal
+              results={questionResults}
+              onDone={() => navigate('/library')}
+            />
+          )}
         </div>
 
         {duration > 0 && (
@@ -241,13 +248,6 @@ export function FinalDisplay() {
           </div>
         )}
       </div>
-
-      {videoEnded && (
-        <QuestionSummaryModal
-          results={questionResults}
-          onDone={() => navigate('/library')}
-        />
-      )}
     </>
   )
 }

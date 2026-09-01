@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 python-dotenv
+certifi
 
 # model/combined_model_final.py's own dependencies — this backend imports
 # that file directly, so its imports must be satisfiable in this env too.

@@ -4,6 +4,8 @@ it never reimplements or edits model/smriti_combined_model.py.
 """
 
 import json
+import logging
+import ssl
 import sys
 import threading
 import traceback
@@ -15,6 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Literal, Optional
 
+import certifi
 from dotenv import load_dotenv
 
 load_dotenv()  # backend/.env — separate from the model's and frontend's env files
@@ -31,6 +34,14 @@ sys.path.insert(0, str(MODEL_DIR))
 
 from combined_model_final import find_pause_points  # noqa: E402
 
+
+logger = logging.getLogger("cadence.backend")
+
+# Some Python installs (notably python.org's macOS builds) ship without a
+# populated system CA bundle, which makes every urllib HTTPS request fail
+# SSL verification regardless of network conditions. Using certifi's bundle
+# explicitly avoids depending on that system config being right.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 app = FastAPI(title="Cadence backend")
 
@@ -67,17 +78,29 @@ jobs: dict[str, Job] = {}
 
 
 def _fetch_video_title(video_id: str) -> str:
-    """Best-effort video title via YouTube's public oEmbed endpoint (no API
-    key required). Falls back to a generic title if it's unreachable."""
+    """Video title via YouTube's public oEmbed endpoint (no API key
+    required). Falls back to a generic title if it's unreachable, but logs
+    a warning whenever that happens so a fetch failure doesn't silently
+    masquerade as the real title."""
     oembed_url = "https://www.youtube.com/oembed?" + urllib.parse.urlencode(
         {"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"}
     )
     try:
-        with urllib.request.urlopen(oembed_url, timeout=5) as resp:
+        with urllib.request.urlopen(oembed_url, timeout=5, context=_SSL_CONTEXT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data.get("title") or f"Processed video ({video_id})"
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        return f"Processed video ({video_id})"
+        title = data.get("title")
+        if title:
+            return title
+        logger.warning(
+            "oEmbed response for video %s had no title; using fallback", video_id
+        )
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        logger.warning(
+            "Failed to fetch title for video %s via oEmbed (%s); using fallback",
+            video_id,
+            exc,
+        )
+    return f"Processed video ({video_id})"
 
 
 def _to_frontend_shape(raw: dict, youtube_url: str) -> dict:
