@@ -20,6 +20,7 @@ export function FinalDisplay() {
   const video = state?.videoId ? getVideo(state.videoId) : undefined
 
   const playerRef = useRef<YouTubePlayer | null>(null)
+  const playerContainerRef = useRef<HTMLDivElement | null>(null)
   const [duration, setDuration] = useState(0)
   const [triggeredIndices, setTriggeredIndices] = useState<Set<number>>(new Set())
   const [passedIndices, setPassedIndices] = useState<Set<number>>(new Set())
@@ -122,7 +123,27 @@ export function FinalDisplay() {
     height: '100%',
     playerVars: {
       autoplay: 0,
+      // Native fullscreen only fullscreens the iframe, which would hide the
+      // question popup. We disable it and provide our own button that
+      // fullscreens a wrapper containing both the iframe and the popup.
+      fs: 0,
     },
+  }
+
+  const handleFullscreenToggle = () => {
+    const container = playerContainerRef.current
+    if (!container) return
+
+    if (document.fullscreenElement) {
+      document.exitFullscreen()
+      return
+    }
+
+    const request =
+      container.requestFullscreen ??
+      (container as unknown as { webkitRequestFullscreen?: () => Promise<void> })
+        .webkitRequestFullscreen
+    request?.call(container)
   }
 
   const questionResults: QuestionResult[] = video.pausePoints
@@ -148,15 +169,51 @@ export function FinalDisplay() {
           <h1>{video.title}</h1>
         </div>
 
-        <YouTube
-          videoId={video.videoId}
-          className="video-wrapper"
-          iframeClassName="video-iframe"
-          opts={opts}
-          onReady={handleReady}
-          onEnd={handleEnd}
-        />
-        
+        <div className="player-container" ref={playerContainerRef}>
+          <YouTube
+            videoId={video.videoId}
+            className="video-wrapper"
+            iframeClassName="video-iframe"
+            opts={opts}
+            onReady={handleReady}
+            onEnd={handleEnd}
+          />
+
+          <button
+            type="button"
+            className="fullscreen-button"
+            aria-label="Toggle fullscreen"
+            onClick={handleFullscreenToggle}
+          >
+            <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="20" cy="20" r="20" fill="black" fillOpacity="0.5" />
+              <path
+                d="M14 14L20 14M14 14L14 20M14 14L18 18"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+              />
+              <path
+                d="M26 26L20 26M26 26L26 20M26 26L22 22"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+              />
+            </svg>
+          </button>
+
+          {activePoint?.hasQuestion && activePoint.question && (
+            <QuestionModal
+              question={activePoint.question}
+              onAnswer={handleAnswer}
+              onContinue={resumeFromPause}
+            />
+          )}
+        </div>
 
         {duration > 0 && (
           <div className="pause-track">
@@ -184,14 +241,6 @@ export function FinalDisplay() {
           </div>
         )}
       </div>
-
-      {activePoint?.hasQuestion && activePoint.question && (
-        <QuestionModal
-          question={activePoint.question}
-          onAnswer={handleAnswer}
-          onContinue={resumeFromPause}
-        />
-      )}
 
       {videoEnded && (
         <QuestionSummaryModal
