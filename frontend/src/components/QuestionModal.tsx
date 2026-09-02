@@ -32,7 +32,6 @@ export function QuestionModal({ question, onAnswer, onContinue }: QuestionModalP
     <div className="question-overlay" role="dialog" aria-modal="true">
       <div className="question-card card">
         <div className="modal-peeking-bear">
-          <TeddyBear pose="peeking" size={110} />
         </div>
         <h2>{question.prompt}</h2>
         <div className="choice-list">

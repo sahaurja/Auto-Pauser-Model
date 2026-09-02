@@ -253,15 +253,6 @@ input {
   );
 }
 
-/* These two cards host content (the peeking bear) that pokes outside the
- * card's own box, so they keep plain blocky corners instead of the notch
- * clip-path, which would cut that overflow away. */
-.question-card,
-.modal-card {
-  clip-path: none;
-  border-radius: var(--radius-card);
-}
-
 .text-field {
   width: 100%;
   padding: 12px 14px;
@@ -677,9 +668,8 @@ input {
 }
 
 .modal-peeking-bear {
-  position: absolute;
-  top: -34px;
-  left: 32px;
+  display: flex;
+  justify-content: center;
 }
 
 .choice-list {
