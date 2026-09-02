@@ -13,12 +13,40 @@
   --color-success-bg: #eef2e4;
   --color-error: #c1694f;
   --color-error-bg: #fbeae2;
-  --shadow-warm: 0 4px 16px rgba(112, 74, 45, 0.1);
-  --shadow-warm-sm: 0 2px 10px rgba(112, 74, 45, 0.08);
-  --radius-card: 20px;
-  --radius-btn: 14px;
+  --shadow-warm: 4px 4px 0 rgba(112, 74, 45, 0.28);
+  --shadow-warm-sm: 3px 3px 0 rgba(112, 74, 45, 0.26);
+  --radius-card: 8px;
+  --radius-btn: 0px;
+  --pixel-notch: 8px;
   --font-family: "Nunito", "Apple SD Gothic Neo", "Helvetica Neue", Helvetica,
     Arial, "Segoe UI", Roboto, sans-serif;
+  --font-pixel: "Press Start 2P", "Courier New", monospace;
+}
+
+/* Blocky "cut corner" panel, the classic 8-bit UI silhouette. */
+.pixel-panel {
+  border-radius: 0 !important;
+  clip-path: polygon(
+    0 var(--pixel-notch),
+    var(--pixel-notch) var(--pixel-notch),
+    var(--pixel-notch) 0,
+    calc(100% - var(--pixel-notch)) 0,
+    calc(100% - var(--pixel-notch)) var(--pixel-notch),
+    100% var(--pixel-notch),
+    100% calc(100% - var(--pixel-notch)),
+    calc(100% - var(--pixel-notch)) calc(100% - var(--pixel-notch)),
+    calc(100% - var(--pixel-notch)) 100%,
+    var(--pixel-notch) 100%,
+    var(--pixel-notch) calc(100% - var(--pixel-notch)),
+    0 calc(100% - var(--pixel-notch))
+  );
+}
+
+.teddy-sprite {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  display: block;
+  object-fit: cover;
 }
 
 * {
@@ -33,6 +61,12 @@ body {
 
 body {
   background-color: var(--color-bg);
+  background-image: linear-gradient(
+      rgba(112, 74, 45, 0.05) 1px,
+      transparent 1px
+    ),
+    linear-gradient(90deg, rgba(112, 74, 45, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
   color: var(--color-text);
   font-family: var(--font-family);
   font-weight: 500;
@@ -50,6 +84,22 @@ h1,
 h2,
 h3 {
   color: var(--color-brown-dark);
+  font-family: var(--font-pixel);
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0.5px;
+}
+
+h1 {
+  font-size: 22px;
+}
+
+h2 {
+  font-size: 18px;
+}
+
+h3 {
+  font-size: 15px;
 }
 
 a {
@@ -106,6 +156,20 @@ input {
   animation: sparkle-twinkle 2.2s ease-in-out infinite;
 }
 
+.btn-primary,
+.btn-secondary {
+  font-family: var(--font-pixel);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  clip-path: polygon(
+    0 6px, 6px 6px, 6px 0,
+    calc(100% - 6px) 0, calc(100% - 6px) 6px, 100% 6px,
+    100% calc(100% - 6px), calc(100% - 6px) calc(100% - 6px), calc(100% - 6px) 100%,
+    6px 100%, 6px calc(100% - 6px), 0 calc(100% - 6px)
+  );
+  transition: transform 0.08s steps(2), box-shadow 0.08s steps(2);
+}
+
 .btn-primary {
   display: inline-flex;
   align-items: center;
@@ -115,16 +179,19 @@ input {
   color: var(--color-brown-dark);
   border: none;
   border-radius: var(--radius-btn);
-  padding: 12px 24px;
-  font-size: 16px;
+  padding: 14px 22px;
   font-weight: 700;
   box-shadow: var(--shadow-warm-sm);
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .btn-primary:hover:not(:disabled) {
   background-color: var(--color-action-dark);
-  box-shadow: var(--shadow-warm);
+}
+
+.btn-primary:active:not(:disabled),
+.btn-secondary:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: none;
 }
 
 .btn-primary:disabled {
@@ -139,11 +206,11 @@ input {
   gap: 8px;
   background-color: var(--color-surface);
   color: var(--color-brown-dark);
-  border: 2px solid var(--color-brown);
+  border: 3px solid var(--color-brown);
   border-radius: var(--radius-btn);
-  padding: 10px 22px;
-  font-size: 16px;
+  padding: 11px 20px;
   font-weight: 700;
+  box-shadow: var(--shadow-warm-sm);
 }
 
 .link-button {
@@ -175,16 +242,31 @@ input {
 
 .card {
   background-color: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 2px solid var(--color-border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-warm);
+  clip-path: polygon(
+    0 var(--pixel-notch), var(--pixel-notch) var(--pixel-notch), var(--pixel-notch) 0,
+    calc(100% - var(--pixel-notch)) 0, calc(100% - var(--pixel-notch)) var(--pixel-notch), 100% var(--pixel-notch),
+    100% calc(100% - var(--pixel-notch)), calc(100% - var(--pixel-notch)) calc(100% - var(--pixel-notch)), calc(100% - var(--pixel-notch)) 100%,
+    var(--pixel-notch) 100%, var(--pixel-notch) calc(100% - var(--pixel-notch)), 0 calc(100% - var(--pixel-notch))
+  );
+}
+
+/* These two cards host content (the peeking bear) that pokes outside the
+ * card's own box, so they keep plain blocky corners instead of the notch
+ * clip-path, which would cut that overflow away. */
+.question-card,
+.modal-card {
+  clip-path: none;
+  border-radius: var(--radius-card);
 }
 
 .text-field {
   width: 100%;
   padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  border: 2px solid var(--color-border);
   background-color: var(--color-surface);
   color: var(--color-text);
 }
@@ -222,8 +304,7 @@ input {
 }
 
 .auth-title {
-  font-size: 28px;
-  font-weight: 700;
+  font-size: 20px;
   margin: 0;
 }
 
@@ -245,7 +326,7 @@ input {
   justify-content: space-between;
   padding: 16px 32px;
   background-color: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 3px solid var(--color-border);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -274,15 +355,14 @@ input {
   flex-shrink: 0;
 }
 
-.logo-icon svg {
-  display: block;
-  position: relative;
-  top: -1px;
+.logo-icon .teddy-sprite {
+  border-radius: 2px;
+  object-position: 50% 25%;
 }
 
 .logo-text {
-  font-size: 22px;
-  font-weight: 700;
+  font-family: var(--font-pixel);
+  font-size: 16px;
   color: var(--color-text);
 }
 
@@ -299,11 +379,12 @@ input {
   align-items: center;
   gap: 8px;
   text-decoration: none;
-  font-weight: 600;
-  font-size: 18px;
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  letter-spacing: 0.5px;
   color: var(--color-text);
-  padding: 10px 18px;
-  border-radius: 999px;
+  padding: 10px 16px;
+  border-radius: 4px;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
@@ -339,8 +420,8 @@ input {
 }
 
 .hero-title {
-  font-size: 34px;
-  margin: 0 0 14px;
+  font-size: 24px;
+  margin: 0 0 18px;
 }
 
 .hero-subtitle {
@@ -395,8 +476,8 @@ input {
 
 .toggle {
   display: flex;
-  border: 2px solid var(--color-brown);
-  border-radius: 999px;
+  border: 3px solid var(--color-brown);
+  border-radius: 4px;
   overflow: hidden;
 }
 
@@ -405,7 +486,8 @@ input {
   background: var(--color-surface);
   color: var(--color-brown-dark);
   padding: 8px 20px;
-  font-weight: 600;
+  font-family: var(--font-pixel);
+  font-size: 11px;
 }
 
 .toggle button.active {
@@ -580,7 +662,7 @@ input {
 }
 
 .question-card h2 {
-  font-size: 28px;
+  font-size: 18px;
 }
 
 .modal-card {
@@ -609,8 +691,8 @@ input {
 .choice-button {
   text-align: left;
   padding: 14px 16px;
-  border-radius: 12px;
-  border: 2px solid var(--color-border);
+  border-radius: 4px;
+  border: 3px solid var(--color-border);
   background: var(--color-surface);
   font-size: 16px;
   font-weight: 500;
